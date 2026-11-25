@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.next/
+**/.next/
+**/.next-demo/
+**/tsconfig.tsbuildinfo
+
+# Generated Prisma client
+packages/database/generated/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime data
+profiles/
+exports/
+acme/
+tls/
+shared/
+.drill-exports/
+*.stb
+*.key
+
+# Logs, coverage, editor files
+*.log
+coverage/
+.DS_Store
+.idea/
+.vscode/

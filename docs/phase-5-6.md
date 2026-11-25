@@ -1,0 +1,15 @@
+# Contacts and campaigns
+
+Contact PII is AES-GCM encrypted with account/contact-specific AAD. Identity aliases use keyed HMAC and unique ContactIdentity rows to detect duplicate username/phone/Telegram ID. Consent is never inferred from import. Opt-in requires a non-future timestamp and evidence reference; revocation, opt-out and erasure add independent suppression hashes. Erasure cascades aliases/consent/list data while preserving a recipient outcome with null contact reference. Active PROCESSING recipients prevent erasure until the operation is settled.
+
+CSV and XLSX import accept up to 500 rows, 512 KB files (JSON envelope bounded at 1 MiB). XLSX parsing runs in a worker with a 96 MiB JS heap limit and 5-second deadline. Only the first worksheet is imported; schema validation rejects unknown columns, malformed identities and invented consent. Duplicate rows are reported without silently modifying existing consent. CSV export escapes spreadsheet formulas and refuses >100 contacts instead of silently truncating. An asynchronous large export module is still required.
+
+Campaign creation uses a UUID creation key plus request hash. Templates are immutable encrypted versions; revising is draft-only. Only {{name}} is allowed. Test Send API creates a separate one-recipient campaign, preserving all normal consent/queue checks. Audience snapshots are limited to 1000 contacts per campaign as a local capacity guard, not a Telegram limit.
+
+Jobs and outbox events commit atomically. Redis carries UUID references only. Dispatcher retries publication safely; durable DB claims prevent repeated execution even if an event is delivered twice. Mutating BullMQ jobs have attempts=1 and maxStalledCount=0. Orphaned RUNNING jobs become UNKNOWN, not pending. Failed queue jobs have reference-only dead letters for manual review. A conservative global local-capacity action slot defaults to 30 seconds, independently configurable and never represented as an official Telegram limit.
+
+If Redis loses transport state, the reconciler republishes only old, due, durable PENDING jobs after a 60-second publication grace window. It never republishes RUNNING/UNKNOWN operations. API backpressure refuses new campaign snapshots above QUEUE_MAX_PENDING (default 5000 local pending/running/paused jobs). These are deployment safety budgets, not Telegram limits.
+
+Immediately before clicking Send: verify lease, cancellation, account/campaign state, fresh consent/suppression and durable recipient=PENDING; commit PROCESSING/attemptedAt. Any uncertain result thereafter is UNKNOWN and pauses the campaign. The adapter must prove a new outgoing UI element, not merely an existing message with matching text. Sending is disabled by default. A verified authenticated registry and an authorized test account are mandatory acceptance prerequisites.
+
+Implemented APIs include /contacts, /contacts/import/export, /contacts/:id/consent, /contact-lists, members/rename/delete/merge; /campaigns, validate/start/pause/resume/cancel, template history/revision and test-send. Some advanced contact/template controls remain API-only; see STATUS.md.

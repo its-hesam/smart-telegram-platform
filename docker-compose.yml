@@ -1,0 +1,83 @@
+name: smart-telegram-platform
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: { context: ., dockerfile: infrastructure/docker/Dockerfile }
+    command: ["npm", "run", "db:migrate"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+    depends_on:
+      postgres: { condition: service_healthy }
+  api:
+    build: { context: ., dockerfile: infrastructure/docker/Dockerfile }
+    command: ["node", "dist/apps/api/src/main.js"]
+    environment: &runtime
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      API_PORT: 3001
+      LOG_LEVEL: info
+      NODE_ENV: development
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Generate DATA_ENCRYPTION_KEY}
+      IDENTITY_HMAC_KEY: ${IDENTITY_HMAC_KEY:?Generate IDENTITY_HMAC_KEY}
+      PROFILE_ENCRYPTION_KEY: ${PROFILE_ENCRYPTION_KEY:?Generate PROFILE_ENCRYPTION_KEY}
+      PROFILE_ARCHIVE_ROOT: /profiles/encrypted
+      PROFILE_RUNTIME_ROOT: /profiles/runtime
+      TELEGRAM_MUTATIONS_ENABLED: "false"
+      ACTION_INTERVAL_MS: ${ACTION_INTERVAL_MS:-30000}
+      QUEUE_MAX_PENDING: ${QUEUE_MAX_PENDING:-5000}
+    ports: ["127.0.0.1:3001:3001"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 8s
+      retries: 3
+    init: true
+  worker:
+    build: { context: ., dockerfile: infrastructure/docker/Dockerfile }
+    command: ["node", "dist/apps/worker/src/main.js"]
+    environment: *runtime
+    depends_on:
+      api: { condition: service_healthy }
+    init: true
+    volumes: ["encrypted-profiles:/profiles/encrypted"]
+    tmpfs: ["/profiles/runtime:mode=0700,uid=1000,gid=1000,size=512m"]
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1536M }
+  web:
+    build: { context: ., dockerfile: infrastructure/docker/Dockerfile }
+    command: ["npm", "run", "start", "-w", "@smart/web"]
+    environment:
+      API_INTERNAL_URL: http://api:3001
+    ports: ["127.0.0.1:3000:3000"]
+    init: true
+volumes:
+  postgres-data:
+  redis-data:
+  encrypted-profiles:

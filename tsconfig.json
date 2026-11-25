@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "target": "ES2023", "module": "NodeNext", "moduleResolution": "NodeNext",
+    "strict": true, "noUncheckedIndexedAccess": true, "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true, "skipLibCheck": true, "experimentalDecorators": true,
+    "emitDecoratorMetadata": true, "resolveJsonModule": true, "types": ["node"]
+  },
+  "include": ["apps/api/src/**/*.ts", "apps/worker/src/**/*.ts", "packages/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts"],
+  "exclude": ["node_modules", "dist", "packages/database/generated"]
+}

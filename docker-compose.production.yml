@@ -1,0 +1,129 @@
+name: smart-telegram-production
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+    volumes: ["database:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: ["redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.production
+      target: migrate
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+    depends_on:
+      postgres: { condition: service_healthy }
+  api:
+    build: &build
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.production
+      target: runtime
+    environment: &environment
+      NODE_ENV: production
+      DATABASE_URL: ${APP_DATABASE_URL:?Use a least-privilege application role, not the PostgreSQL bootstrap user}
+      REDIS_URL: redis://redis:6379
+      API_PORT: 3001
+      WORKER_LOGIN_URL: http://worker:3002
+      APP_ORIGIN: ${APP_ORIGIN:?HTTPS origin required}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?required}
+      IDENTITY_HMAC_KEY: ${IDENTITY_HMAC_KEY:?required}
+      PROFILE_ENCRYPTION_KEY: ${PROFILE_ENCRYPTION_KEY:?required}
+      PROFILE_ARCHIVE_ROOT: /profiles/encrypted
+      PROFILE_RUNTIME_ROOT: /profiles/runtime
+      EXPORT_ROOT: /exports
+      EXPORT_BATCH_SIZE: ${EXPORT_BATCH_SIZE:-500}
+      IMPORT_MAX_ROWS: ${IMPORT_MAX_ROWS:-5000}
+      WORKER_DISPATCH_BATCH: ${WORKER_DISPATCH_BATCH:-500}
+      WORKER_MAINTENANCE_MS: ${WORKER_MAINTENANCE_MS:-15000}
+      TELEGRAM_MUTATIONS_ENABLED: "false"
+      ACTION_INTERVAL_MS: ${ACTION_INTERVAL_MS:-30000}
+      QUEUE_MAX_PENDING: ${QUEUE_MAX_PENDING:-5000}
+    command: ["node", "dist/apps/api/src/main.js"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+    init: true
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    volumes: ["exports:/exports"]
+  worker:
+    stop_grace_period: 60s
+    build: *build
+    command: ["node", "dist/apps/worker/src/main.js"]
+    environment: *environment
+    volumes: ["profiles:/profiles/encrypted", "exports:/exports"]
+    tmpfs: ["/profiles/runtime:mode=0700,uid=1000,gid=1000,size=512m", "/tmp:size=128m"]
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3002/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    init: true
+    ulimits:
+      core: 0
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true", "seccomp=./infrastructure/docker/seccomp-profile.json"]
+    cap_drop: ["ALL"]
+    deploy:
+      resources:
+        limits: { cpus: "2", memory: 1536M }
+  web:
+    build: *build
+    command: ["node", "node_modules/next/dist/bin/next", "start", "apps/web", "--hostname", "0.0.0.0"]
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:3001
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+    init: true
+    restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+  proxy:
+    image: nginx:stable-alpine
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./infrastructure/nginx/production.conf:/etc/nginx/conf.d/default.conf:ro
+      - ${TLS_CERT_DIR:?path to TLS certificate directory}:/etc/nginx/tls:ro
+      - ${ACME_WEBROOT:-./acme}:/var/www/certbot:ro
+    depends_on:
+      web: { condition: service_healthy }
+      api: { condition: service_healthy }
+    restart: unless-stopped
+volumes:
+  database:
+  redis:
+  profiles:
+  exports:

@@ -1,0 +1,368 @@
+generator client {
+  provider = "prisma-client"
+  output = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+enum AccountStatus {
+  DISCONNECTED
+  AUTH_REQUIRED
+  AUTHENTICATING
+  CONNECTED
+  SESSION_EXPIRED
+  ACTION_REQUIRED
+  RESTRICTED
+  PAUSED
+  ERROR
+}
+enum ConsentStatus {
+  UNKNOWN
+  OPTED_IN
+  OPTED_OUT
+  REVOKED
+}
+enum CampaignStatus {
+  DRAFT
+  VALIDATING
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  PARTIALLY_COMPLETED
+  CANCELLED
+  FAILED
+}
+enum MessageStatus {
+  PENDING
+  PROCESSING
+  SENT_UI_CONFIRMED
+  UNKNOWN
+  FAILED
+  SKIPPED
+  CANCELLED
+}
+enum JobStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+  UNKNOWN
+}
+enum JobType {
+  SESSION_VALIDATION
+  ACCOUNT_HEALTH_CHECK
+  APPROVED_MESSAGE_SEND
+  CAMPAIGN_EXECUTION
+  GROUP_INFORMATION_READ
+  INVITATION_MANAGEMENT
+  CONSENT_IMPORT
+  DATA_EXPORT
+  CLEANUP
+  REPORT_GENERATION
+}
+enum TargetType {
+  GROUP
+  CHANNEL
+}
+enum OwnershipStatus {
+  UNVERIFIED
+  OWNER
+  ADMINISTRATOR
+  MEMBER
+}
+
+model AdminUser {
+  id           String        @id @default(uuid()) @db.Uuid
+  email        String        @unique
+  passwordHash String
+  role         Role          @default(VIEWER)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  sessions     AuthSession[]
+  auditLogs    AuditLog[]
+  authorizations OutreachAuthorization[]
+}
+model AuthSession {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique
+  expiresAt DateTime  @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  user      AdminUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+  @@index([userId])
+}
+model TelegramAccount {
+  id                 String               @id @default(uuid()) @db.Uuid
+  displayName        String
+  encryptedPhone     String
+  identityKey        String               @unique
+  status             AccountStatus        @default(DISCONNECTED)
+  lastActiveAt       DateTime?             @db.Timestamptz(3)
+  lastErrorCode      String?
+  createdAt          DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime              @updatedAt @db.Timestamptz(3)
+  sessions           AccountSession[]
+  lease              AccountLease?
+  restrictions       AccountRestriction[]
+  jobs               Job[]
+  campaigns          Campaign[]
+  recipients         CampaignRecipient[]
+  @@index([status])
+}
+model AccountSession {
+  id                 String          @id @default(uuid()) @db.Uuid
+  accountId          String          @db.Uuid
+  profileReference   String          @unique
+  encryptionKeyVersion Int
+  status             AccountStatus   @default(AUTH_REQUIRED)
+  lastValidatedAt    DateTime?        @db.Timestamptz(3)
+  createdAt          DateTime         @default(now()) @db.Timestamptz(3)
+  account            TelegramAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  @@index([accountId])
+}
+model AccountLease {
+  accountId    String          @id @db.Uuid
+  ownerId      String
+  fencingToken BigInt          @default(1)
+  expiresAt    DateTime        @db.Timestamptz(3)
+  heartbeatAt  DateTime        @db.Timestamptz(3)
+  account      TelegramAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+}
+model Contact {
+  id                       String             @id @default(uuid()) @db.Uuid
+  identityKey              String             @unique
+  encryptedUsername        String?
+  encryptedTelegramId      String?
+  encryptedPhone           String?
+  encryptedDisplayName     String
+  encryptedNotes           String?
+  source                   String
+  sourceReference          String?
+  consentStatus            ConsentStatus      @default(UNKNOWN)
+  consentTimestamp         DateTime?          @db.Timestamptz(3)
+  consentEvidenceReference String?
+  tags                     String[]           @default([])
+  lastContactAt            DateTime?          @db.Timestamptz(3)
+  createdAt                DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt                DateTime           @updatedAt @db.Timestamptz(3)
+  lists                    ContactListMember[]
+  consents                 ConsentRecord[]
+  recipients               CampaignRecipient[]
+  identities               ContactIdentity[]
+  @@index([consentStatus])
+  @@index([createdAt, id])
+  @@index([tags], type: Gin)
+}
+model ContactIdentity {
+  key       String  @id
+  kind      String
+  contactId String  @db.Uuid
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  @@index([contactId])
+}
+model ConsentRecord {
+  id                String        @id @default(uuid()) @db.Uuid
+  contactId         String        @db.Uuid
+  status            ConsentStatus
+  evidenceReference String?
+  consentedAt       DateTime?     @db.Timestamptz(3)
+  recordedAt        DateTime      @default(now()) @db.Timestamptz(3)
+  contact           Contact       @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  @@index([contactId, recordedAt])
+}
+// Kept independently of contact erasure to prevent accidental re-import and sending.
+model Suppression {
+  identityKey String   @id
+  reason      String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+}
+model ContactList {
+  id          String              @id @default(uuid()) @db.Uuid
+  name        String              @unique
+  description String?
+  createdAt   DateTime            @default(now()) @db.Timestamptz(3)
+  members     ContactListMember[]
+  campaigns   Campaign[]
+}
+model ContactListMember {
+  id        String      @id @default(uuid()) @db.Uuid
+  listId    String      @db.Uuid
+  contactId String      @db.Uuid
+  createdAt DateTime    @default(now()) @db.Timestamptz(3)
+  list      ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact   Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  @@unique([listId, contactId])
+  @@index([contactId])
+}
+model TelegramTarget {
+  id              String          @id @default(uuid()) @db.Uuid
+  type            TargetType
+  reference       String          @unique
+  identityKey     String          @unique
+  title           String
+  ownershipStatus OwnershipStatus @default(UNVERIFIED)
+  createdAt       DateTime        @default(now()) @db.Timestamptz(3)
+  invitations     Invitation[]
+}
+model Invitation {
+  id                String         @id @default(uuid()) @db.Uuid
+  targetId          String         @db.Uuid
+  encryptedLink     String
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+  expiresAt         DateTime?      @db.Timestamptz(3)
+  revokedAt         DateTime?      @db.Timestamptz(3)
+  target            TelegramTarget @relation(fields: [targetId], references: [id], onDelete: Cascade)
+  @@index([targetId])
+}
+model MessageTemplate {
+  id        String     @id @default(uuid()) @db.Uuid
+  name      String
+  content   String
+  version   Int
+  createdAt DateTime   @default(now()) @db.Timestamptz(3)
+  campaigns Campaign[]
+  @@unique([name, version])
+}
+model Campaign {
+  id                String              @id @default(uuid()) @db.Uuid
+  name              String
+  creationKey       String              @unique
+  requestHash       String
+  messageTemplateId String              @db.Uuid
+  contactListId     String              @db.Uuid
+  accountId         String              @db.Uuid
+  status            CampaignStatus      @default(DRAFT)
+  scheduledAt       DateTime?           @db.Timestamptz(3)
+  createdAt         DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime            @updatedAt @db.Timestamptz(3)
+  template          MessageTemplate     @relation(fields: [messageTemplateId], references: [id], onDelete: Restrict)
+  list              ContactList         @relation(fields: [contactListId], references: [id], onDelete: Restrict)
+  account           TelegramAccount     @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  recipients        CampaignRecipient[]
+  jobs              Job[]
+  @@index([status, scheduledAt])
+  @@index([accountId])
+  @@index([messageTemplateId])
+  @@index([contactListId])
+}
+model CampaignRecipient {
+  id             String          @id @default(uuid()) @db.Uuid
+  campaignId     String          @db.Uuid
+  contactId      String?         @db.Uuid
+  accountId      String          @db.Uuid
+  status         MessageStatus   @default(PENDING)
+  idempotencyKey String          @unique
+  attemptedAt    DateTime?       @db.Timestamptz(3)
+  confirmedAt    DateTime?       @db.Timestamptz(3)
+  errorCode      String?
+  campaign       Campaign        @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  contact        Contact?        @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  account        TelegramAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@unique([campaignId, contactId])
+  @@index([campaignId, status])
+  @@index([accountId])
+  @@index([contactId])
+}
+model Job {
+  id              String           @id @default(uuid()) @db.Uuid
+  type            JobType
+  status          JobStatus        @default(PENDING)
+  accountId       String?          @db.Uuid
+  campaignId      String?          @db.Uuid
+  priority        Int              @default(0)
+  payloadReference String?
+  idempotencyKey  String           @unique
+  traceId         String           @db.Uuid
+  workerId        String?
+  attemptCount    Int              @default(0)
+  progress        Int              @default(0)
+  processed       Int              @default(0)
+  totalItems      Int?
+  checkpoint      Json?
+  params          Json?
+  cancellationRequestedAt DateTime? @db.Timestamptz(3)
+  scheduledAt     DateTime?        @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  startedAt       DateTime?        @db.Timestamptz(3)
+  finishedAt      DateTime?        @db.Timestamptz(3)
+  errorCode       String?
+  result          Json?
+  account         TelegramAccount? @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  campaign        Campaign?        @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  events          OutboxEvent[]
+  @@index([status, scheduledAt, priority])
+  @@index([status, type, createdAt])
+  @@index([accountId, status])
+  @@index([campaignId])
+  @@index([traceId])
+}
+model WorkerHeartbeat {
+  id          String   @id
+  lastSeenAt  DateTime @db.Timestamptz(3)
+  expiresAt   DateTime @db.Timestamptz(3)
+  @@index([expiresAt])
+}
+model OutboxEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  jobId       String    @db.Uuid
+  version     Int       @default(1)
+  type        String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  publishedAt DateTime? @db.Timestamptz(3)
+  job         Job       @relation(fields: [jobId], references: [id], onDelete: Restrict)
+  @@index([publishedAt, createdAt])
+  @@index([jobId])
+}
+model AccountRestriction {
+  id              String          @id @default(uuid()) @db.Uuid
+  accountId       String          @db.Uuid
+  restrictionType String
+  description     String
+  detectedAt      DateTime        @default(now()) @db.Timestamptz(3)
+  resolvedAt      DateTime?       @db.Timestamptz(3)
+  account         TelegramAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  @@index([accountId, resolvedAt])
+}
+model AuditLog {
+  id           String     @id @default(uuid()) @db.Uuid
+  actorId      String?    @db.Uuid
+  action       String
+  resourceType String
+  resourceId   String
+  timestamp    DateTime   @default(now()) @db.Timestamptz(3)
+  metadata     Json?
+  actor        AdminUser? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  @@index([resourceType, resourceId, timestamp])
+  @@index([actorId])
+  @@index([timestamp])
+}
+model SystemSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+}
+// Operator-level legal basis for outreach. This is deliberately a single,
+// explicit, auditable authorization instead of a per-contact consent form.
+model OutreachAuthorization {
+  id                String     @id @default(uuid()) @db.Uuid
+  actorId           String?    @db.Uuid
+  evidenceReference String
+  scope             String     @default("all")
+  createdAt         DateTime   @default(now()) @db.Timestamptz(3)
+  revokedAt         DateTime?  @db.Timestamptz(3)
+  actor             AdminUser? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  @@index([revokedAt])
+  @@index([createdAt])
+}

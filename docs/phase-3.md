@@ -1,0 +1,9 @@
+# Phase 3 — engine implementation and remaining acceptance
+
+Implemented: real Playwright persistent Chromium contexts, independent profiles, bounded capacity, health/crash observation, cancellation and shutdown; PostgreSQL account leases with heartbeat and monotonic fencing token; fail-closed stale lease handling; full-profile authenticated encrypted archive preserving IndexedDB/localStorage; Linux tmpfs required for production runtime. Lease ownership is released only after closing Chromium and sealing the profile. Crash or ownership loss requires manual recovery, never automatic takeover.
+
+The owner-assisted `npm run owner:login` command opens the official Telegram Web UI in a visible isolated browser. Set ACCOUNT_ID to an existing authorized account UUID and configure PROFILE_* in .env. Enter QR/OTP/2FA directly in the browser, never in the console or API. Press Enter in the console to close/encrypt. Account becomes ACTION_REQUIRED, not CONNECTED, until validated UI selectors exist.
+
+Public Telegram Web K was inspected without an account: heading `Log in by QR Code` and button `Log in by phone number` were observed and captured in a login-only versioned registry. No authenticated-chat selectors are invented. The adapter implements strict role/accessible-name matching, exact-chat verification and new outgoing-message visibility confirmation for a supplied verified registry. Message mutations are disabled by default. Fixture registries are explicitly test-only and are not used against Telegram.
+
+Pending acceptance: authorized Telegram test account login, live authenticated selector registry, Telegram UI send/reconnect, server profile recovery drill and production tmpfs/volume deployment. No owner account was supplied and no real Telegram login or send was attempted. This phase therefore remains partially accepted even when offline engine tests pass; work on independent dashboard/contact modules may continue.
